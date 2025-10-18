@@ -11,8 +11,53 @@ import os
 import time
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple, List, Dict
 from dataclasses import dataclass
+from contextlib import contextmanager
+
+
+class Profiler:
+    """Thread-safe profiler for tracking time spent in different operations"""
+    
+    def __init__(self):
+        self._timings: Dict[str, float] = {}
+        self._counts: Dict[str, int] = {}
+        self._lock = threading.Lock()
+    
+    @contextmanager
+    def profile(self, operation: str):
+        """Context manager to profile a code block"""
+        start = time.perf_counter()
+        try:
+            yield
+        finally:
+            elapsed = time.perf_counter() - start
+            with self._lock:
+                self._timings[operation] = self._timings.get(operation, 0.0) + elapsed
+                self._counts[operation] = self._counts.get(operation, 0) + 1
+    
+    def print_summary(self):
+        """Print profiling summary showing time distribution"""
+        print("\n" + "="*80)
+        print("PROFILING SUMMARY")
+        print("="*80)
+        
+        total_time = sum(self._timings.values())
+        
+        sorted_operations = sorted(self._timings.items(), key=lambda x: x[1], reverse=True)
+        
+        print(f"\n{'Operation':<40} {'Time (s)':<12} {'Percent':<10} {'Count':<10} {'Avg (ms)'}")
+        print("-" * 80)
+        
+        for operation, elapsed in sorted_operations:
+            count = self._counts[operation]
+            percentage = (elapsed / total_time * 100) if total_time > 0 else 0
+            avg_ms = (elapsed / count * 1000) if count > 0 else 0
+            print(f"{operation:<40} {elapsed:>11.2f} {percentage:>9.1f}% {count:>9} {avg_ms:>10.2f}")
+        
+        print("-" * 80)
+        print(f"{'TOTAL':<40} {total_time:>11.2f}")
+        print("="*80)
 
 
 @dataclass
@@ -40,14 +85,15 @@ class GameDivider:
         endgame_start = None
         
         for idx, board in enumerate(boards):
-            # Check for midgame start
             if midgame_start is None:
-                if (GameDivider.majors_and_minors(board) <= 10 or
-                    GameDivider.backrank_sparse(board) or
-                    GameDivider.mixedness(board) > 150):
+                piece_count = GameDivider.majors_and_minors(board)
+                if piece_count <= 10:
+                    midgame_start = idx
+                elif GameDivider.backrank_sparse(board):
+                    midgame_start = idx
+                elif GameDivider.mixedness(board) > 150:
                     midgame_start = idx
             
-            # Check for endgame start (only after midgame has started)
             if midgame_start is not None and endgame_start is None:
                 if GameDivider.majors_and_minors(board) <= 6:
                     endgame_start = idx
@@ -58,11 +104,10 @@ class GameDivider:
     @staticmethod
     def majors_and_minors(board: chess.Board) -> int:
         """Count pieces excluding kings and pawns"""
-        count = 0
-        for piece_type in [chess.KNIGHT, chess.BISHOP, chess.ROOK, chess.QUEEN]:
-            count += len(board.pieces(piece_type, chess.WHITE))
-            count += len(board.pieces(piece_type, chess.BLACK))
-        return count
+        return (chess.popcount(board.knights) + 
+                chess.popcount(board.bishops) + 
+                chess.popcount(board.rooks) + 
+                chess.popcount(board.queens))
     
     @staticmethod
     def backrank_sparse(board: chess.Board) -> bool:
@@ -70,15 +115,14 @@ class GameDivider:
         white_backrank = 0
         black_backrank = 0
         
-        for square in chess.SQUARES:
-            rank = chess.square_rank(square)
-            piece = board.piece_at(square)
+        for file in range(8):
+            piece = board.piece_at(chess.square(file, 0))
+            if piece is not None and piece.color == chess.WHITE:
+                white_backrank += 1
             
-            if piece is not None:
-                if rank == 0 and piece.color == chess.WHITE:
-                    white_backrank += 1
-                elif rank == 7 and piece.color == chess.BLACK:
-                    black_backrank += 1
+            piece = board.piece_at(chess.square(file, 7))
+            if piece is not None and piece.color == chess.BLACK:
+                black_backrank += 1
         
         return white_backrank < 4 or black_backrank < 4
     
@@ -86,18 +130,17 @@ class GameDivider:
     def mixedness(board: chess.Board) -> int:
         """Calculate mixedness score based on piece distribution"""
         total_score = 0
+        piece_map = board.piece_map()
         
-        # Check 2x2 regions across the board
-        for y in range(7):  # rows 0-6 (so 2x2 fits)
-            for x in range(7):  # files 0-6
+        for y in range(7):
+            for x in range(7):
                 white_count = 0
                 black_count = 0
                 
-                # Count pieces in this 2x2 region
                 for dy in range(2):
                     for dx in range(2):
                         square = chess.square(x + dx, y + dy)
-                        piece = board.piece_at(square)
+                        piece = piece_map.get(square)
                         
                         if piece is not None:
                             if piece.color == chess.WHITE:
@@ -105,56 +148,53 @@ class GameDivider:
                             else:
                                 black_count += 1
                 
-                # Calculate score for this region
                 total_score += GameDivider.score(y + 1, white_count, black_count)
+                if total_score > 150:
+                    return total_score
         
         return total_score
     
     @staticmethod
     def score(y: int, white: int, black: int) -> int:
         """Score function from Lichess's implementation"""
-        if white == 0 and black == 0:
-            return 0
-        
-        # Single color patterns
-        if white == 1 and black == 0:
-            return 1 + (8 - y)
-        if white == 2 and black == 0:
-            return 2 + (y - 2) if y > 2 else 0
-        if white == 3 and black == 0:
-            return 3 + (y - 1) if y > 1 else 0
-        if white == 4 and black == 0:
-            return 3 + (y - 1) if y > 1 else 0
-        
-        if white == 0 and black == 1:
-            return 1 + y
-        if white == 0 and black == 2:
-            return 2 + (6 - y) if y < 6 else 0
-        if white == 0 and black == 3:
-            return 3 + (7 - y) if y < 7 else 0
-        if white == 0 and black == 4:
-            return 3 + (7 - y) if y < 7 else 0
-        
-        # Mixed patterns
-        if white == 1 and black == 1:
-            return 5 + abs(4 - y)
-        if white == 2 and black == 1:
-            return 4 + (y - 1)
-        if white == 3 and black == 1:
-            return 5 + (y - 1)
-        if white == 1 and black == 2:
-            return 4 + (7 - y)
-        if white == 2 and black == 2:
-            return 7
-        if white == 1 and black == 3:
-            return 5 + (7 - y)
+        if white == 0:
+            if black == 0:
+                return 0
+            if black == 1:
+                return 1 + y
+            if black == 2:
+                return 2 + (6 - y) if y < 6 else 0
+            if black == 3:
+                return 3 + (7 - y) if y < 7 else 0
+            if black == 4:
+                return 3 + (7 - y) if y < 7 else 0
+        elif black == 0:
+            if white == 1:
+                return 1 + (8 - y)
+            if white == 2:
+                return 2 + (y - 2) if y > 2 else 0
+            if white == 3 or white == 4:
+                return 3 + (y - 1) if y > 1 else 0
+        else:
+            if white == 1 and black == 1:
+                return 5 + abs(4 - y)
+            if white == 2 and black == 1:
+                return 4 + (y - 1)
+            if white == 3 and black == 1:
+                return 5 + (y - 1)
+            if white == 1 and black == 2:
+                return 4 + (7 - y)
+            if white == 2 and black == 2:
+                return 7
+            if white == 1 and black == 3:
+                return 5 + (7 - y)
         
         return 0
 
 
 class ChessAnalyzer:
     
-    def __init__(self, input_file: str, output_file: str, max_workers: int = None):
+    def __init__(self, input_file: str, output_file: str, max_workers: int = None, limit: int = None):
         self.input_file = input_file
         self.output_file = output_file
         self.games_processed = 0
@@ -164,15 +204,21 @@ class ChessAnalyzer:
         self.skipped_no_rating = 0
         self.skipped_insufficient_eval = 0
         self.max_workers = max_workers or min(32, (os.cpu_count() or 1) + 4)
+        self.limit = limit
         self._lock = threading.Lock()
         self._last_progress_time = time.time()
-        self._progress_interval = 5.0  # Report progress every 5 seconds
+        self._start_time = time.time()
+        self._progress_interval = 5.0
+        self.profiler = Profiler()
+        self._stop_processing = False
     
     def process_file(self, batch_size: int = 100):
         """Process the entire PGN file and write results to CSV using multithreading"""
         print(f"Processing: {self.input_file}")
         print(f"Output to: {self.output_file}")
         print(f"Using {self.max_workers} threads with batch size {batch_size}")
+        if self.limit:
+            print(f"Limiting to {self.limit} successfully processed games")
         
         with open(self.output_file, 'w', newline='', encoding='utf-8') as csv_file:
             writer = csv.writer(csv_file)
@@ -186,12 +232,26 @@ class ChessAnalyzer:
             with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
                 self._process_file_streaming(writer, batch_size, executor)
         
-        print(f"Complete! Processed: {self.games_processed}, Skipped: {self.games_skipped}")
-        print(f"Skip reasons:")
-        print(f"  - No time control: {self.skipped_no_time_control}")
-        print(f"  - No evaluation data: {self.skipped_no_eval}")
-        print(f"  - No/invalid ratings: {self.skipped_no_rating}")
-        print(f"  - Insufficient evaluation data: {self.skipped_insufficient_eval}")
+        total_read = self.games_processed + self.games_skipped
+        elapsed = time.time() - self._start_time
+        rate = total_read / elapsed if elapsed > 0 else 0
+        process_pct = (self.games_processed / total_read * 100) if total_read > 0 else 0
+        
+        print(f"\n{'='*80}")
+        print(f"COMPLETE!")
+        print(f"{'='*80}")
+        print(f"Total games read:     {total_read:,}")
+        print(f"Games processed:      {self.games_processed:,} ({process_pct:.1f}% of read)")
+        print(f"Games skipped:        {self.games_skipped:,} ({100-process_pct:.1f}% of read)")
+        print(f"Total time:           {elapsed:.1f}s")
+        print(f"Processing rate:      {rate:.1f} games/sec")
+        print(f"\nSkip reasons:")
+        print(f"  - No time control:           {self.skipped_no_time_control:,}")
+        print(f"  - No evaluation data:        {self.skipped_no_eval:,}")
+        print(f"  - No/invalid ratings:        {self.skipped_no_rating:,}")
+        print(f"  - Insufficient evaluation:   {self.skipped_insufficient_eval:,}")
+        
+        self.profiler.print_summary()
     
     def _process_file_streaming(self, writer, batch_size: int, executor):
         """Process the PGN file in streaming batches with parallel processing"""
@@ -202,13 +262,16 @@ class ChessAnalyzer:
         batch_queue = Queue(maxsize=self.max_workers * 2)  # Buffer for 2x workers
         results_queue = Queue()
         
-        # Thread for reading games and creating batches
         def game_reader():
             current_batch = []
             
             with open(self.input_file, 'r', encoding='utf-8') as pgn_file:
                 while True:
-                    game = chess.pgn.read_game(pgn_file)
+                    if self._stop_processing:
+                        break
+                    
+                    with self.profiler.profile('chess.pgn.read_game'):
+                        game = chess.pgn.read_game(pgn_file)
                     if game is None:
                         break
                     
@@ -218,11 +281,9 @@ class ChessAnalyzer:
                         batch_queue.put(current_batch)
                         current_batch = []
                 
-                # Add remaining games as final batch
                 if current_batch:
                     batch_queue.put(current_batch)
             
-            # Signal end of batches
             batch_queue.put(None)
         
         # Thread for writing results to CSV
@@ -300,22 +361,32 @@ class ChessAnalyzer:
         batch_skipped = 0
         
         for game in games:
-            metrics = self.process_game(game)
+            with self.profiler.profile('process_game (total)'):
+                metrics = self.process_game(game)
             if metrics is not None:
                 batch_results.append(metrics)
                 batch_processed += 1
             else:
                 batch_skipped += 1
         
-        # Update global counters atomically
         with self._lock:
             self.games_processed += batch_processed
             self.games_skipped += batch_skipped
             
-            # Progress reporting: time-based intervals
+            if self.limit and self.games_processed >= self.limit:
+                self._stop_processing = True
+            
             current_time = time.time()
             if current_time - self._last_progress_time >= self._progress_interval:
-                print(f"Processed: {self.games_processed} games, Skipped: {self.games_skipped}")
+                total_read = self.games_processed + self.games_skipped
+                elapsed = current_time - self._start_time
+                rate = total_read / elapsed if elapsed > 0 else 0
+                process_pct = (self.games_processed / total_read * 100) if total_read > 0 else 0
+                
+                print(f"Read: {total_read:,} games | "
+                      f"Processed: {self.games_processed:,} ({process_pct:.1f}%) | "
+                      f"Skipped: {self.games_skipped:,} | "
+                      f"Rate: {rate:.1f} games/sec")
                 self._last_progress_time = current_time
         
         return batch_results
@@ -328,35 +399,32 @@ class ChessAnalyzer:
     
     def has_evaluation_data(self, game: chess.pgn.Game) -> bool:
         """Check if the game has %eval annotations on its moves"""
-        # Quick check: if the game has no moves, skip it
         if not game.variations:
             return False
             
-        # Check for evaluation data in the game
-        # We'll do a more thorough check since we need reliable filtering
         node = game
-        eval_found = False
+        move_count = 0
         
-        while node.variations:
+        while node.variations and move_count < 5:
             next_node = node.variation(0)
             if '%eval' in next_node.comment:
-                eval_found = True
-                break
+                return True
             node = next_node
+            move_count += 1
         
-        return eval_found
+        return False
 
     def process_game(self, game: chess.pgn.Game) -> Optional[Tuple[GameMetrics, GameMetrics]]:
         """Process a single game and return metrics for both players"""
         headers = game.headers
         
-        # Early filtering: check basic requirements first
         time_control = headers.get('TimeControl', '')
         if not time_control:
             return None
             
-        # Skip games without evaluation data early (before expensive operations)
-        if not self.has_evaluation_data(game):
+        with self.profiler.profile('has_evaluation_data'):
+            has_eval = self.has_evaluation_data(game)
+        if not has_eval:
             return None
         
         # Extract metadata
@@ -369,46 +437,45 @@ class ChessAnalyzer:
         except ValueError:
             return None
         
-        # Skip games without ratings
         if white_elo == 0 or black_elo == 0:
             return None
         
-        # Replay the game and collect board positions
-        boards = []
-        moves = []
-        evals = []
-        node = game
-        
-        while node.variations:
-            next_node = node.variation(0)
-            boards.append(node.board())
-            moves.append(next_node)
+        with self.profiler.profile('replay_game'):
+            boards = []
+            moves = []
+            evals = []
+            node = game
+            board = game.board()
             
-            # Extract evaluation from comment
-            eval_value = self.extract_eval(next_node.comment)
-            evals.append(eval_value)
-            
-            node = next_node
+            while node.variations:
+                next_node = node.variation(0)
+                boards.append(board.copy())
+                moves.append(next_node)
+                
+                eval_value = self.extract_eval(next_node.comment)
+                evals.append(eval_value)
+                
+                board.push(next_node.move)
+                node = next_node
         
-        # Determine game phases
-        midgame_start, endgame_start = GameDivider.divide_game(boards)
+        with self.profiler.profile('GameDivider.divide_game'):
+            midgame_start, endgame_start = GameDivider.divide_game(boards)
         
         if midgame_start is None:
             return None
         
-        # Use endgame_start as the end of midgame, or end of game if no endgame
         midgame_end = endgame_start if endgame_start is not None else len(boards)
         
-        # Calculate metrics for both players
-        white_metrics = self.calculate_player_metrics(
-            moves, evals, midgame_start, midgame_end,
-            'White', time_control, white_elo
-        )
-        
-        black_metrics = self.calculate_player_metrics(
-            moves, evals, midgame_start, midgame_end,
-            'Black', time_control, black_elo
-        )
+        with self.profiler.profile('calculate_player_metrics'):
+            white_metrics = self.calculate_player_metrics(
+                moves, evals, midgame_start, midgame_end,
+                'White', time_control, white_elo
+            )
+            
+            black_metrics = self.calculate_player_metrics(
+                moves, evals, midgame_start, midgame_end,
+                'Black', time_control, black_elo
+            )
         
         return white_metrics, black_metrics
     
@@ -511,12 +578,14 @@ def main():
                        help='Output CSV file path')
     parser.add_argument('--workers', '-w', type=int, default=None,
                        help='Number of worker threads (default: auto-detect)')
-    parser.add_argument('--batch-size', '-b', type=int, default=1000,
-                       help='Batch size for processing games (default: 100)')
+    parser.add_argument('--batch-size', '-b', type=int, default=100,
+                       help='Batch size for processing games (default: 1000)')
+    parser.add_argument('--limit', '-l', type=int, default=None,
+                       help='Limit number of successfully processed games (default: no limit)')
     
     args = parser.parse_args()
     
-    analyzer = ChessAnalyzer(args.input, args.output, args.workers)
+    analyzer = ChessAnalyzer(args.input, args.output, args.workers, args.limit)
     analyzer.process_file(args.batch_size)
 
 

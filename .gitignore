@@ -2,4 +2,3 @@ data/
 .venv/
 __pycache__
 uv.lock
-chess_analyzer_new.py
