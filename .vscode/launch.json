@@ -1,0 +1,42 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "PyPy: Chess Analyzer (2025-09)",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/chess_analyzer.py",
+            "console": "integratedTerminal",
+            "python": "F:\\pypy\\pypy3.exe",
+            "args": [
+                "-i", "data/lichess_db_standard_rated_2025-09.pgn",
+                "-o", "data/complete/lichess_db_standard_rated_2025-09_metrics.csv"
+            ]
+        },
+        {
+            "name": "PyPy: Chess Analyzer (with args)",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/chess_analyzer.py",
+            "console": "integratedTerminal",
+            "python": "F:\\pypy\\pypy3.exe",
+            "noDebug": true,
+            "args": [
+                "-i", "data/lichess_db_standard_rated_2025-09.pgn",
+                "-o", "data/lichess_db_standard_rated_2025-09.csv",
+                // "-l", "100000",
+                // "-w", "8",
+                "-b", "1000"
+            ]
+        },
+        {
+            "name": "Python (CPython): ACPL Analysis",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/acpl_timecontrol_analysis.py",
+            "console": "integratedTerminal",
+            "noDebug": true,
+        }
+    ]
+}
+
