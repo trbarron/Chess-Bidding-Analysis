@@ -1,0 +1,32 @@
+[project]
+name = "chess-elo-comparer"
+version = "0.1.0"
+description = "Chess ELO rating analysis and ACPL comparison tool"
+requires-python = ">=3.11"
+dependencies = [
+    "chess>=1.11.2",
+    "pandas>=2.3.3",
+    "matplotlib>=3.10.7",
+    "numpy>=2.3.3",
+    "seaborn>=0.12.0",
+    "scipy>=1.11.0",
+    "scikit-learn>=1.3.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=7.0.0",
+    "black>=23.0.0",
+    "flake8>=6.0.0",
+    "mypy>=1.0.0",
+]
+
+[tool.black]
+line-length = 88
+target-version = ['py311']
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
