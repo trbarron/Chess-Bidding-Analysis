@@ -16,9 +16,9 @@ All game data is sourced from the [Lichess Open Database](https://database.liche
 
 ## Example Output
 
-![Analysis Output](media/analysis_2.png)
+![Analysis Output](media/analysis_3.png)
 
-The analysis shows average centipawn loss across different time controls and rating ranges, revealing how time pressure affects player accuracy.
+The analysis shows average centipawn loss across Lichess time control categories (Bullet, Blitz, Rapid, Classical) and rating ranges, revealing how time pressure affects player accuracy. Each time control is categorized according to Lichess standards using the formula: Starting Time + (40 × Increment).
 
 ## Usage
 
@@ -39,7 +39,7 @@ The analyzer processes PGN files with evaluation data and outputs metrics for ea
 python acpl_timecontrol_analysis.py
 ```
 
-The analysis script loads the CSV output, groups time controls into buckets (0-30s, 30s-1m, 1m-3m, 3m-5m, etc.), creates rating buckets (200-point intervals), and generates visualizations showing how ACPL varies across time controls and rating levels.
+The analysis script loads the CSV output, categorizes time controls using Lichess standards (Bullet: <3min, Blitz: 3-8min, Rapid: 8-25min, Classical: 25+min), creates rating buckets (200-point intervals), and generates visualizations showing how ACPL varies across time controls and rating levels.
 
 ## Performance
 
