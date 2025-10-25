@@ -36,6 +36,14 @@
             "program": "${workspaceFolder}/acpl_timecontrol_analysis.py",
             "console": "integratedTerminal",
             "noDebug": true,
+        },
+        {
+            "name": "Python (CPython): ACPL Outcome Analysis",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/acpl_outcome_analysis.py",
+            "console": "integratedTerminal",
+            "noDebug": true,
         }
     ]
 }

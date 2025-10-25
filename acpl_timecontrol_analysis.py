@@ -1,7 +1,6 @@
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
-import seaborn as sns
 from pathlib import Path
 from scipy import stats
 from sklearn.linear_model import LinearRegression
@@ -30,7 +29,7 @@ def load_and_combine_data():
     return combined_df
 
 def filter_and_group_time_controls(df):
-    """Filter and categorize time controls using Lichess's official categories."""
+    """Filter and identify specific time controls with sufficient data (no increment, >= 60 seconds)."""
     # Parse time control format (e.g., "300+0", "600+5", "1800+0")
     time_control_parts = df['TimeControl'].str.split('+')
     
@@ -42,37 +41,31 @@ def filter_and_group_time_controls(df):
     valid_time_controls = df['StartingTime'].notna() & df['Increment'].notna()
     df = df[valid_time_controls].copy()
     
-    # Calculate total time using Lichess formula: Starting Time + 40 × Increment
-    df['TotalTimeSeconds'] = df['StartingTime'] + (40 * df['Increment'])
+    print(f"Total games before filtering: {df.shape[0]:,} rows")
+    total_valid = df.shape[0]
+    
+    # Filter to only games with 0 increment
+    df = df[df['Increment'] == 0].copy()
+    
+    print(f"Games with 0 increment: {df.shape[0]:,} rows ({df.shape[0]/total_valid*100:.1f}% of valid games)")
+    
+    # Filter to only games with starting time >= 60 seconds (1 minute)
+    df = df[df['StartingTime'] >= 60].copy()
+    
+    print(f"Games with time control >= 60+0: {df.shape[0]:,} rows ({df.shape[0]/total_valid*100:.1f}% of valid games)")
+    
+    # For no-increment games, time in seconds equals starting time
+    df['TotalTimeSeconds'] = df['StartingTime']
     df['TotalTimeMinutes'] = df['TotalTimeSeconds'] / 60
     
-    def categorize_time_control_lichess(total_time_seconds):
-        """Categorize time control according to Lichess standards."""
-        if total_time_seconds < 180:  # Less than 3 minutes
-            return "Bullet"
-        elif total_time_seconds < 480:  # 3-8 minutes
-            return "Blitz"
-        elif total_time_seconds < 1500:  # 8-25 minutes
-            return "Rapid"
-        else:  # 25+ minutes
-            return "Classical"
+    # Group all time controls >= 30 minutes as "Classical"
+    df['TimeControlSpecific'] = df.apply(
+        lambda row: 'Classical (≥30min)' if row['TotalTimeMinutes'] >= 30 
+        else f"{int(row['StartingTime'])}+0", 
+        axis=1
+    )
     
-    df['TimeControlGroup'] = df['TotalTimeSeconds'].apply(categorize_time_control_lichess)
-    
-    print(f"Total games analyzed: {df.shape[0]} rows")
-    print(f"Unique time controls: {sorted(df['TimeControl'].unique())}")
-    print(f"Time control groups: {sorted(df['TimeControlGroup'].unique())}")
-    print(f"Time control distribution:")
-    for group in ["Bullet", "Blitz", "Rapid", "Classical"]:
-        count = (df['TimeControlGroup'] == group).sum()
-        if count > 0:
-            print(f"  {group}: {count} games")
-    
-    # Show some examples of time control categorization
-    print(f"\nTime control categorization examples:")
-    sample_df = df[['TimeControl', 'StartingTime', 'Increment', 'TotalTimeSeconds', 'TimeControlGroup']].drop_duplicates().head(10)
-    for _, row in sample_df.iterrows():
-        print(f"  {row['TimeControl']} → {row['StartingTime']}s + {row['Increment']}s increment → {row['TotalTimeSeconds']}s total → {row['TimeControlGroup']}")
+    print(f"Total games analyzed: {df.shape[0]:,} rows")
     
     return df
 
@@ -84,13 +77,43 @@ def create_rating_buckets(df):
     # Create readable bucket labels
     df['RatingBucketLabel'] = df['RatingBucket'].astype(str) + '-' + (df['RatingBucket'] + 199).astype(str)
     
-    print(f"Rating range: {df['Rating'].min()} - {df['Rating'].max()}")
-    print(f"Rating buckets: {sorted(df['RatingBucket'].unique())}")
-    
     return df
 
+def filter_time_controls_by_threshold(df, min_games_per_bucket=100000):
+    """Filter to only include time controls with sufficient games per rating bucket."""
+    # Count games per time control per rating bucket
+    counts = df.groupby(['TimeControlSpecific', 'RatingBucket']).size().reset_index(name='GameCount')
+    
+    # For each time control, check if it meets the threshold in at least one rating bucket
+    time_control_valid = counts.groupby('TimeControlSpecific')['GameCount'].max() >= min_games_per_bucket
+    valid_time_controls = time_control_valid[time_control_valid].index.tolist()
+    
+    print(f"\nTime controls with at least {min_games_per_bucket:,} games in at least one rating bucket:")
+    
+    # Get detailed stats for valid time controls
+    for tc in sorted(valid_time_controls, key=lambda x: (x == 'Classical (≥30min)', 
+                                                          float(x.split('+')[0]) if '+' in x else float('inf'))):
+        tc_data = df[df['TimeControlSpecific'] == tc]
+        total_games = len(tc_data)
+        avg_time = tc_data['TotalTimeMinutes'].median()
+        
+        # Show count per rating bucket
+        bucket_counts = counts[counts['TimeControlSpecific'] == tc].sort_values('RatingBucket')
+        print(f"\n  {tc} (median: {avg_time:.1f}min, total: {total_games:,} games)")
+        for _, row in bucket_counts.iterrows():
+            bucket_label = f"{int(row['RatingBucket'])}-{int(row['RatingBucket'])+199}"
+            status = "✓" if row['GameCount'] >= min_games_per_bucket else "✗"
+            print(f"    {bucket_label}: {row['GameCount']:,} games {status}")
+    
+    # Filter dataframe to only include valid time controls
+    df_filtered = df[df['TimeControlSpecific'].isin(valid_time_controls)].copy()
+    
+    print(f"\nFiltered to {len(df_filtered):,} games across {len(valid_time_controls)} time controls")
+    
+    return df_filtered
+
 def calculate_averages(df):
-    """Calculate weighted average ACPL_midgame for each time control group and rating bucket."""
+    """Calculate weighted average ACPL_midgame for each specific time control and rating bucket."""
     def weighted_avg_and_std(group):
         weights = group['NumMoves_midgame']
         values = group['ACPL_midgame']
@@ -106,93 +129,106 @@ def calculate_averages(df):
             'TotalMoves': weights.sum()
         })
     
-    averages = df.groupby(['TimeControlGroup', 'RatingBucket', 'RatingBucketLabel']).apply(
+    averages = df.groupby(['TimeControlSpecific', 'RatingBucket', 'RatingBucketLabel']).apply(
         weighted_avg_and_std, include_groups=False
     ).reset_index()
     
-    # Lichess time control order: Bullet, Blitz, Rapid, Classical
-    bucket_order = ["Bullet", "Blitz", "Rapid", "Classical"]
-    time_controls = [tc for tc in bucket_order if tc in averages['TimeControlGroup'].unique()]
-    averages['TimeGroupOrder'] = averages['TimeControlGroup'].map({group: i for i, group in enumerate(time_controls)})
+    # Add median time for each time control for sorting and display
+    time_control_medians = df.groupby('TimeControlSpecific')['TotalTimeMinutes'].median().to_dict()
+    averages['MedianTimeMinutes'] = averages['TimeControlSpecific'].map(time_control_medians)
     
-    print(f"Calculated weighted averages for {len(averages)} combinations")
-    print(f"Time control groups: {time_controls}")
+    # Sort time controls by median time
+    averages = averages.sort_values('MedianTimeMinutes')
+    
+    # Create ordering for x-axis
+    unique_tcs = averages.sort_values('MedianTimeMinutes')['TimeControlSpecific'].unique()
+    tc_order_map = {tc: i for i, tc in enumerate(unique_tcs)}
+    averages['TimeControlOrder'] = averages['TimeControlSpecific'].map(tc_order_map)
     
     return averages
 
 def create_visualization(averages_df):
-    """Create line plot showing ACPL vs time controls by rating bucket."""
+    """Create line plot showing ACPL vs specific time controls by rating bucket."""
     plt.style.use('seaborn-v0_8')
     
-    # Lichess time control order: Bullet, Blitz, Rapid, Classical
-    bucket_order = ["Bullet", "Blitz", "Rapid", "Classical"]
-    time_controls = [tc for tc in bucket_order if tc in averages_df['TimeControlGroup'].unique()]
+    # Get unique time controls sorted by median time
+    time_controls = averages_df.sort_values('MedianTimeMinutes')['TimeControlSpecific'].unique()
     num_time_controls = len(time_controls)
     
-    fig_width = max(12, 4 + num_time_controls * 2)
+    fig_width = max(14, 4 + num_time_controls * 1.5)
     fig, ax = plt.subplots(figsize=(fig_width, 10))
     
     rating_buckets = sorted(averages_df['RatingBucket'].unique())
     
     colors = plt.cm.viridis(np.linspace(0, 1, len(rating_buckets)))
     
+    # Get median times for each time control
+    time_control_medians = averages_df.groupby('TimeControlSpecific')['MedianTimeMinutes'].first().to_dict()
+    
     for i, bucket in enumerate(rating_buckets):
-        bucket_data = averages_df[averages_df['RatingBucket'] == bucket].sort_values('TimeGroupOrder')
+        bucket_data = averages_df[averages_df['RatingBucket'] == bucket].sort_values('TimeControlOrder')
         
         if len(bucket_data) > 0:
             label = bucket_data['RatingBucketLabel'].iloc[0]
             
-            x_positions = bucket_data['TimeGroupOrder'].values
+            # Use median time values for x-axis positioning
+            x_positions = bucket_data['MedianTimeMinutes'].values
             
             ax.plot(x_positions, bucket_data['MeanACPL'], 
-                   marker='o', linewidth=2, markersize=6, 
-                   color=colors[i], label=f'Rating {label}', alpha=0.7)
+                   marker='o', linewidth=2, markersize=8, 
+                   color=colors[i], label=f'Rating {label}', alpha=0.75)
             
+            # Add logarithmic regression line if we have enough data points
             if len(bucket_data) >= 2:
                 X = x_positions
                 y = bucket_data['MeanACPL'].values
                 
-                reg = LinearRegression().fit(np.array(X).reshape(-1, 1), y)
-                y_pred = reg.predict(np.array(X).reshape(-1, 1))
+                # Use log transformation for x values
+                X_log = np.log(X).reshape(-1, 1)
                 
-                r_squared = reg.score(np.array(X).reshape(-1, 1), y)
+                reg = LinearRegression().fit(X_log, y)
+                y_pred = reg.predict(X_log)
                 
-                correlation, p_value = stats.pearsonr(X, y)
+                r_squared = reg.score(X_log, y)
+                
+                # Calculate correlation between log(X) and y
+                correlation, p_value = stats.pearsonr(np.log(X), y)
                 
                 ax.plot(x_positions, y_pred, 
-                       '--', linewidth=2, color=colors[i], alpha=0.8)
+                       '--', linewidth=1.5, color=colors[i], alpha=0.5)
                 
+                # Display R² for significant correlations
                 if p_value < 0.05:
-                    ax.text(0.02, 0.98 - i*0.08, f'{label}: R²={r_squared:.3f}', 
+                    ax.text(0.02, 0.98 - i*0.06, f'{label}: R²={r_squared:.3f}', 
                            transform=ax.transAxes, fontsize=8, color=colors[i],
                            bbox=dict(boxstyle="round,pad=0.3", facecolor='white', alpha=0.7))
     
-    ax.set_xlabel('Time Control', fontsize=12, fontweight='bold')
+    ax.set_xlabel('Time Control (minutes)', fontsize=12, fontweight='bold')
     ax.set_ylabel('Average Centipawn Loss (ACPL) - Midgame (Weighted)', fontsize=12, fontweight='bold')
-    ax.set_title('ACPL vs Time Control by Player Rating Buckets', 
+    ax.set_title('ACPL vs Time Controls (0 Increment, >= 60+0) by Player Rating', 
                 fontsize=14, fontweight='bold', pad=20)
     
     ax.grid(True, alpha=0.3)
     
     ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=10)
     
-    # Create descriptive labels for x-axis
+    # Create x-axis labels
+    x_ticks = []
     x_labels = []
     for tc in time_controls:
-        if tc == 'Bullet':
-            x_labels.append('Bullet\n(< 3 min)')
-        elif tc == 'Blitz':
-            x_labels.append('Blitz\n(3-8 min)')
-        elif tc == 'Rapid':
-            x_labels.append('Rapid\n(8-25 min)')
-        elif tc == 'Classical':
-            x_labels.append('Classical\n(25+ min)')
+        median_time = time_control_medians[tc]
+        x_ticks.append(median_time)
+        
+        # Format label based on time control type
+        if tc == 'Classical (≥30min)':
+            x_labels.append(f'Classical\n(≥30min)')
         else:
-            x_labels.append(tc)
+            # Extract base time and increment from format like "180+0"
+            x_labels.append(f'{tc}\n({median_time:.1f}min)')
     
-    ax.set_xticks(range(len(time_controls)))
-    ax.set_xticklabels(x_labels, rotation=0, ha='center', fontsize=10)
-    
+    ax.set_xticks(x_ticks)
+    ax.set_xticklabels(x_labels, rotation=45, ha='right', fontsize=9)
+    ax.set_ylim(0, 150)
     plt.tight_layout()
     
     return fig
@@ -202,36 +238,23 @@ def print_summary_statistics(averages_df):
     print("\n" + "="*60)
     
     print(f"\nTotal combinations analyzed: {len(averages_df)}")
-    bucket_order = ["Bullet", "Blitz", "Rapid", "Classical"]
-    time_controls = [tc for tc in bucket_order if tc in averages_df['TimeControlGroup'].unique()]
-    print(f"Time controls: {time_controls}")
-    print(f"Rating buckets: {len(averages_df['RatingBucket'].unique())}")
-    
-    print(f"\nACPL Range: {averages_df['MeanACPL'].min():.2f} - {averages_df['MeanACPL'].max():.2f}")
+    print(f"ACPL Range: {averages_df['MeanACPL'].min():.2f} - {averages_df['MeanACPL'].max():.2f}")
     
     print(f"\nWeighted Average ACPL by Time Control:")
-    time_control_summary = averages_df.groupby('TimeControlGroup').agg({
+    time_control_summary = averages_df.groupby('TimeControlSpecific').agg({
         'MeanACPL': ['mean', 'std'],
         'Count': 'sum',
-        'TotalMoves': 'sum'
-    })
+        'TotalMoves': 'sum',
+        'MedianTimeMinutes': 'first'
+    }).sort_values(('MedianTimeMinutes', 'first'))
     
-    # Define time control descriptions for display
-    time_control_descriptions = {
-        'Bullet': '< 3 minutes (fast-paced)',
-        'Blitz': '3-8 minutes (quick games)', 
-        'Rapid': '8-25 minutes (strategic)',
-        'Classical': '25+ minutes (long games)'
-    }
-    
-    for time_group in time_controls:
-        if time_group in time_control_summary.index:
-            mean_acpl = time_control_summary.loc[time_group, ('MeanACPL', 'mean')]
-            std_acpl = time_control_summary.loc[time_group, ('MeanACPL', 'std')]
-            count = time_control_summary.loc[time_group, ('Count', 'sum')]
-            total_moves = time_control_summary.loc[time_group, ('TotalMoves', 'sum')]
-            description = time_control_descriptions.get(time_group, '')
-            print(f"  {time_group} ({description}): {mean_acpl:.2f} ± {std_acpl:.2f} (n={count}, moves={total_moves:.0f})")
+    for time_control in time_control_summary.index:
+        mean_acpl = time_control_summary.loc[time_control, ('MeanACPL', 'mean')]
+        std_acpl = time_control_summary.loc[time_control, ('MeanACPL', 'std')]
+        count = time_control_summary.loc[time_control, ('Count', 'sum')]
+        total_moves = time_control_summary.loc[time_control, ('TotalMoves', 'sum')]
+        median_time = time_control_summary.loc[time_control, ('MedianTimeMinutes', 'first')]
+        print(f"  {time_control} ({median_time:.1f}min): {mean_acpl:.2f} ± {std_acpl:.2f} (n={count:,}, moves={total_moves:.0f})")
     
     print(f"\nWeighted Average ACPL by Rating Bucket:")
     rating_summary = averages_df.groupby('RatingBucketLabel').agg({
@@ -244,19 +267,22 @@ def print_summary_statistics(averages_df):
         std_acpl = rating_summary.loc[rating_bucket, ('MeanACPL', 'std')]
         count = rating_summary.loc[rating_bucket, ('Count', 'sum')]
         total_moves = rating_summary.loc[rating_bucket, ('TotalMoves', 'sum')]
-        print(f"  {rating_bucket}: {mean_acpl:.2f} ± {std_acpl:.2f} (n={count}, moves={total_moves:.0f})")
+        print(f"  {rating_bucket}: {mean_acpl:.2f} ± {std_acpl:.2f} (n={count:,}, moves={total_moves:.0f})")
     
-    print(f"\nLinear Regression Analysis (ACPL vs Time Control):")
-    print("-" * 60)
+    print(f"\nLogarithmic Regression Analysis (Time vs ACPL):")
+    print("-" * 40)
     for bucket in sorted(averages_df['RatingBucket'].unique()):
-        bucket_data = averages_df[averages_df['RatingBucket'] == bucket].sort_values('TimeGroupOrder')
+        bucket_data = averages_df[averages_df['RatingBucket'] == bucket].sort_values('MedianTimeMinutes')
         if len(bucket_data) >= 2:
-            X = bucket_data['TimeGroupOrder'].values
+            X = bucket_data['MedianTimeMinutes'].values
             y = bucket_data['MeanACPL'].values
             
-            reg = LinearRegression().fit(np.array(X).reshape(-1, 1), y)
-            r_squared = reg.score(np.array(X).reshape(-1, 1), y)
-            correlation, p_value = stats.pearsonr(X, y)
+            # Use log transformation for x values
+            X_log = np.log(X).reshape(-1, 1)
+            
+            reg = LinearRegression().fit(X_log, y)
+            r_squared = reg.score(X_log, y)
+            correlation, p_value = stats.pearsonr(np.log(X), y)
             
             slope = reg.coef_[0]
             intercept = reg.intercept_
@@ -264,59 +290,31 @@ def print_summary_statistics(averages_df):
             label = bucket_data['RatingBucketLabel'].iloc[0]
             significance = "***" if p_value < 0.001 else "**" if p_value < 0.01 else "*" if p_value < 0.05 else ""
             
-            print(f"  {label}:")
-            print(f"    Equation: ACPL = {slope:.4f} × TimeControl + {intercept:.2f}")
-            print(f"    R² = {r_squared:.4f}, r = {correlation:.4f}, p = {p_value:.4f} {significance}")
-            print(f"    Interpretation: {'Negative' if slope < 0 else 'Positive'} relationship")
+            print(f"  {label}: R²={r_squared:.3f}, p={p_value:.3f} {significance}")
             if p_value < 0.05:
-                print(f"    → {'Slower time controls' if slope < 0 else 'Faster time controls'} associated with {'lower' if slope < 0 else 'higher'} ACPL")
-            else:
-                print(f"    → No significant relationship between time control and ACPL")
+                direction = "decreases" if slope < 0 else "increases" if slope > 0 else "no trend"
+                print(f"    → Log(time) {direction} ACPL (slope={slope:.3f} ACPL/log(min))")
             print()
 
-def print_time_control_descriptions():
-    """Print descriptions of Lichess time control categories."""
-    print("\nLichess Time Control Categories:")
-    print("-" * 40)
-    print("• BULLET: < 3 minutes total time per player")
-    print("  - Fast-paced games requiring quick decisions")
-    print("  - Examples: 1+0, 2+1, 3+0")
-    print()
-    print("• BLITZ: 3-8 minutes total time per player") 
-    print("  - Quick games with moderate thinking time")
-    print("  - Examples: 3+0, 5+0, 3+2, 5+3")
-    print()
-    print("• RAPID: 8-25 minutes total time per player")
-    print("  - Longer games allowing for more strategic planning")
-    print("  - Examples: 10+0, 15+10, 20+0")
-    print()
-    print("• CLASSICAL: 25+ minutes total time per player")
-    print("  - Long games with extensive thinking time")
-    print("  - Examples: 30+0, 60+0, 90+30")
-    print()
-    print("Note: Total time = Starting Time + (40 × Increment)")
-    print("This formula accounts for typical game length with increments.")
-    print("="*60)
-
-def main():
+def main(min_games_per_bucket=100000):
     """Main analysis function."""
-    print("Chess ACPL vs Time Control Analysis (Lichess Categories)")
+    print("Chess ACPL vs Specific Time Control Analysis (0 Increment, >= 60+0)")
     print("="*60)
-    
-    # Print time control descriptions
-    print_time_control_descriptions()
-    
+        
     # Load and combine data
     df = load_and_combine_data()
     
-    # Filter and categorize time controls using Lichess standards
-    df_filtered = filter_and_group_time_controls(df)
+    # Parse and categorize time controls
+    df_parsed = filter_and_group_time_controls(df)
     
     # Create rating buckets
-    df_bucketed = create_rating_buckets(df_filtered)
+    df_bucketed = create_rating_buckets(df_parsed)
+    
+    # Filter to only include time controls with sufficient data per rating bucket
+    df_filtered = filter_time_controls_by_threshold(df_bucketed, min_games_per_bucket)
     
     # Calculate averages
-    averages = calculate_averages(df_bucketed)
+    averages = calculate_averages(df_filtered)
     
     # Print summary statistics
     print_summary_statistics(averages)
@@ -325,7 +323,7 @@ def main():
     fig = create_visualization(averages)
     
     # Save the plot
-    output_path = "./media/analysis_3.png"
+    output_path = "./media/analysis_4.png"
     fig.savefig(output_path, dpi=300, bbox_inches='tight')
     print(f"\nPlot saved as: {output_path}")
     
