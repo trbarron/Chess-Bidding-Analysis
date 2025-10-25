@@ -5,7 +5,7 @@
             "name": "PyPy: Chess Analyzer (2025-09)",
             "type": "python",
             "request": "launch",
-            "program": "${workspaceFolder}/chess_analyzer.py",
+            "program": "${workspaceFolder}/lichess_game_analyzer.py",
             "console": "integratedTerminal",
             "python": "F:\\pypy\\pypy3.exe",
             "args": [
@@ -17,16 +17,16 @@
             "name": "PyPy: Chess Analyzer (with args)",
             "type": "python",
             "request": "launch",
-            "program": "${workspaceFolder}/chess_analyzer.py",
+            "program": "${workspaceFolder}/lichess_game_analyzer.py",
             "console": "integratedTerminal",
             "python": "F:\\pypy\\pypy3.exe",
             "noDebug": true,
             "args": [
-                "-i", "data/lichess_db_standard_rated_2025-09.pgn",
-                "-o", "data/lichess_db_standard_rated_2025-09.csv",
+                "-i", "data/lichess_db_standard_rated_2020-02.pgn",
+                "-o", "data/lichess_db_standard_rated_2020-02.csv",
                 // "-l", "100000",
                 // "-w", "8",
-                "-b", "1000"
+                "-b", "5000"
             ]
         },
         {

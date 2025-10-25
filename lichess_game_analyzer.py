@@ -70,6 +70,10 @@ class GameMetrics:
     mistakes_midgame: int
     blunders_midgame: int
     num_moves_midgame: int
+    winner: str
+    eco: str
+    opening: str
+    game_id: str
 
 
 class GameDivider:
@@ -225,7 +229,7 @@ class ChessAnalyzer:
             writer.writerow([
                 'TimeControl', 'Rating', 'Color', 'ACPL_midgame',
                 'Inaccuracies_midgame', 'Mistakes_midgame', 'Blunders_midgame',
-                'NumMoves_midgame'
+                'NumMoves_midgame', 'Winner', 'ECO', 'Opening', 'GameID'
             ])
             
             # Process file in streaming batches with parallel processing
@@ -430,6 +434,13 @@ class ChessAnalyzer:
         # Extract metadata
         white_elo = headers.get('WhiteElo', '0')
         black_elo = headers.get('BlackElo', '0')
+        white_player = headers.get('White', 'Unknown')
+        black_player = headers.get('Black', 'Unknown')
+        result = headers.get('Result', 'Unknown')
+        eco = headers.get('ECO', '')
+        opening = headers.get('Opening', '')
+        date = headers.get('Date', '')
+        time = headers.get('UTCTime', '')
         
         try:
             white_elo = int(white_elo)
@@ -466,15 +477,19 @@ class ChessAnalyzer:
         
         midgame_end = endgame_start if endgame_start is not None else len(boards)
         
+        # Extract additional game information
+        winner = self.extract_winner(result, white_player, black_player)
+        game_id = self.create_game_id(white_player, black_player, date, time)
+        
         with self.profiler.profile('calculate_player_metrics'):
             white_metrics = self.calculate_player_metrics(
                 moves, evals, midgame_start, midgame_end,
-                'White', time_control, white_elo
+                'White', time_control, white_elo, winner, eco, opening, game_id
             )
             
             black_metrics = self.calculate_player_metrics(
                 moves, evals, midgame_start, midgame_end,
-                'Black', time_control, black_elo
+                'Black', time_control, black_elo, winner, eco, opening, game_id
             )
         
         return white_metrics, black_metrics
@@ -489,6 +504,28 @@ class ChessAnalyzer:
                 return None
         return None
     
+    def extract_winner(self, result: str, white_player: str, black_player: str) -> str:
+        """Extract winner from game result"""
+        if result == "1-0":
+            return "White"
+        elif result == "0-1":
+            return "Black"
+        elif result == "1/2-1/2":
+            return "Draw"
+        else:
+            return "Unknown"
+    
+    def create_game_id(self, white_player: str, black_player: str, date: str, time: str = None) -> str:
+        """Create unique game identifier using player names and date/time"""
+        white_clean = ''.join(c if c.isalnum() else '_' for c in white_player)
+        black_clean = ''.join(c if c.isalnum() else '_' for c in black_player)
+        
+        # Format date and time
+        date_clean = date.replace('.', '')
+        time_part = time.replace(':', '') if time else '000000'
+        
+        return f"{white_clean}_vs_{black_clean}_{date_clean}_{time_part}"
+    
     def calculate_player_metrics(
         self,
         moves: List[chess.pgn.ChildNode],
@@ -497,7 +534,11 @@ class ChessAnalyzer:
         midgame_end: int,
         color: str,
         time_control: str,
-        rating: int
+        rating: int,
+        winner: str,
+        eco: str,
+        opening: str,
+        game_id: str
     ) -> GameMetrics:
         """Calculate metrics for a single player during the middlegame"""
         
@@ -551,7 +592,11 @@ class ChessAnalyzer:
             inaccuracies_midgame=inaccuracies,
             mistakes_midgame=mistakes,
             blunders_midgame=blunders,
-            num_moves_midgame=move_count
+            num_moves_midgame=move_count,
+            winner=winner,
+            eco=eco,
+            opening=opening,
+            game_id=game_id
         )
     
     def write_metrics(self, writer, metrics: GameMetrics):
@@ -564,7 +609,11 @@ class ChessAnalyzer:
             metrics.inaccuracies_midgame,
             metrics.mistakes_midgame,
             metrics.blunders_midgame,
-            metrics.num_moves_midgame
+            metrics.num_moves_midgame,
+            metrics.winner,
+            metrics.eco,
+            metrics.opening,
+            metrics.game_id
         ])
 
 
