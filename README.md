@@ -33,7 +33,7 @@ Win rate, draw rate, and draw odds analysis by ACPL difference, showing how play
 ### 1. Extract Game Metrics
 
 ```bash
-python chess_analyzer.py --input data/your_pgn_file.pgn --output results.csv
+python lichess_game_analyzer.py --input data/your_pgn_file.pgn --output results.csv
 ```
 
 The analyzer processes PGN files with evaluation data and outputs metrics for each player including:

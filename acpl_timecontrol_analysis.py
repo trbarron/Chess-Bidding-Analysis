@@ -323,7 +323,7 @@ def main(min_games_per_bucket=100000):
     fig = create_visualization(averages)
     
     # Save the plot
-    output_path = "./media/analysis_4.png"
+    output_path = "./media/acpl_timecontrol_analysis_all_combined.png"
     fig.savefig(output_path, dpi=300, bbox_inches='tight')
     print(f"\nPlot saved as: {output_path}")
     
