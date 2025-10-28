@@ -17,15 +17,16 @@ All game data is sourced from the [Lichess Open Database](https://database.liche
 ## Example Output
 
 ### ACPL by Time Control
-![ACPL Analysis](media/analysis_3.png)
+![ACPL Analysis](media/acpl_timecontrol_analysis_all_combined.png)
 
 Average centipawn loss across time controls and rating ranges, showing how time pressure affects player accuracy.
 
 ### Win Rates and Draw Odds
 ![Win Rate Analysis](media/acpl_outcome_winrate_all_combined.png)
+![Draw Rate Analysis](media/acpl_outcome_drawrate_all_combined.png)
 ![Draw Odds Analysis](media/acpl_outcome_drawodds_all_combined.png)
 
-Win rate and draw odds analysis by ACPL difference, showing how playing accuracy translates to game outcomes across rating levels.
+Win rate, draw rate, and draw odds analysis by ACPL difference, showing how playing accuracy translates to game outcomes across rating levels.
 
 ## Usage
 
