@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from pathlib import Path
 import seaborn as sns
+import argparse
 
 def load_and_combine_data():
     """Load all CSV files from the data directory and combine them."""
@@ -160,6 +161,10 @@ def calculate_outcome_rates(df, min_games=100):
             black_win_rate = black_wins / n_games * 100
             draw_rate = draws / n_games * 100
             
+            # Calculate draw odds rates (draws count as wins for Black)
+            black_with_draw_odds_rate = (black_wins + draws) / n_games * 100
+            white_with_draw_odds_rate = white_wins / n_games * 100  # White loses on draws
+            
             results.append({
                 'TimeControlCategory': tc_category,
                 'RatingBucket': rating_bucket,
@@ -169,6 +174,8 @@ def calculate_outcome_rates(df, min_games=100):
                 'WhiteWinRate': white_win_rate,
                 'BlackWinRate': black_win_rate,
                 'DrawRate': draw_rate,
+                'BlackDrawOddsRate': black_with_draw_odds_rate,
+                'WhiteDrawOddsRate': white_with_draw_odds_rate,
                 'WhiteWins': white_wins,
                 'BlackWins': black_wins,
                 'Draws': draws
@@ -213,6 +220,10 @@ def calculate_outcome_rates_by_specific_tc(df, min_games=1000):
             black_win_rate = black_wins / n_games * 100
             draw_rate = draws / n_games * 100
             
+            # Calculate draw odds rates (draws count as wins for Black)
+            black_with_draw_odds_rate = (black_wins + draws) / n_games * 100
+            white_with_draw_odds_rate = white_wins / n_games * 100
+            
             results.append({
                 'SpecificTimeControl': tc,
                 'RatingBucket': rating_bucket,
@@ -222,6 +233,8 @@ def calculate_outcome_rates_by_specific_tc(df, min_games=1000):
                 'WhiteWinRate': white_win_rate,
                 'BlackWinRate': black_win_rate,
                 'DrawRate': draw_rate,
+                'BlackDrawOddsRate': black_with_draw_odds_rate,
+                'WhiteDrawOddsRate': white_with_draw_odds_rate,
                 'WhiteWins': white_wins,
                 'BlackWins': black_wins,
                 'Draws': draws
@@ -481,6 +494,72 @@ def create_time_control_comparison_visualization(results_df, rating_bucket, metr
     
     return fig
 
+def create_draw_odds_visualization(results_df, rating_buckets=None, time_control_label="All"):
+    """Create a plot showing White's win rate when Black has draw odds vs ACPL difference for multiple rating buckets."""
+    if rating_buckets is None:
+        rating_buckets = sorted(results_df['RatingBucket'].unique())
+    
+    fig, ax = plt.subplots(figsize=(16, 10))
+    
+    # Set background color for the entire plot
+    ax.set_facecolor('#f0f0f0')  # Light grey base
+    
+    # Get x-axis range
+    x_min = results_df['ACPL_Diff_Bucket'].min()
+    x_max = results_df['ACPL_Diff_Bucket'].max()
+    
+    # Add shaded regions to indicate which player is doing better
+    # Left side (White playing better) - white background
+    ax.axvspan(x_min, 0, alpha=0.6, color='white', label='White Playing Better', zorder=0)
+    # Right side (Black playing better) - grey background
+    ax.axvspan(0, x_max, alpha=0.6, color='#d0d0d0', label='Black Playing Better', zorder=0)
+    
+    colors = plt.cm.viridis(np.linspace(0, 1, len(rating_buckets)))
+    
+    for i, rating_bucket in enumerate(rating_buckets):
+        bucket_data = results_df[results_df['RatingBucket'] == rating_bucket].copy()
+        bucket_data = bucket_data.sort_values('ACPL_Diff_Bucket')
+        
+        if len(bucket_data) > 0:
+            rating_label = bucket_data['RatingBucketLabel'].iloc[0]
+            
+            # Plot White's win rate when Black has draw odds (higher = White winning, lower = Black winning/drawing)
+            ax.plot(bucket_data['ACPL_Diff_Bucket'], bucket_data['WhiteDrawOddsRate'],
+                   marker='o', linewidth=2.5, markersize=7, 
+                   color=colors[i], label=f'Rating {rating_label}', alpha=0.8, zorder=2)
+    
+    # Add reference line at 50%
+    ax.axhline(y=50, color='black', linestyle='--', linewidth=1.5, alpha=0.6, label='50% Win Rate', zorder=1)
+    
+    ax.set_xlabel('ACPL Difference (White ACPL - Black ACPL)', fontsize=13, fontweight='bold')
+    ax.set_ylabel('White Win Rate (Black has Draw Odds) (%)', fontsize=13, fontweight='bold')
+    
+    title = f'White Win Rate vs ACPL Difference by Player Rating (Black has Draw Odds)'
+    if time_control_label != "All":
+        title += f'\nTime Control: {time_control_label}'
+    ax.set_title(title, fontsize=15, fontweight='bold', pad=20)
+    
+    # Improve X axis clarity
+    ax.grid(True, alpha=0.3, linewidth=0.8, zorder=1)
+    ax.grid(True, which='major', axis='x', alpha=0.5, linewidth=1, zorder=1)
+    
+    # Set more readable x-axis ticks
+    x_ticks = np.arange(np.floor(x_min/50)*50, np.ceil(x_max/50)*50 + 1, 50)
+    ax.set_xticks(x_ticks)
+    ax.tick_params(axis='x', labelsize=11)
+    ax.tick_params(axis='y', labelsize=11)
+    
+    ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=11)
+    
+    # Add text annotation explaining draw odds
+    ax.text(0.02, 0.02, 'Black has Draw Odds: Draws count as wins for Black\nHigher values = White must win, Lower values = Black wins or draws',
+            transform=ax.transAxes, fontsize=11, 
+            bbox=dict(boxstyle='round', facecolor='yellow', alpha=0.7))
+    
+    plt.tight_layout()
+    
+    return fig
+
 def create_outcome_stacked_chart(results_df, rating_buckets=None):
     """Create stacked area chart showing all three outcomes."""
     if rating_buckets is None:
@@ -561,10 +640,25 @@ def print_summary_statistics(df, results_df):
             rating_label = bucket_data['RatingBucketLabel'].iloc[0]
             print(f"  Rating {rating_label}: r = {correlation:.3f}")
 
-def main(min_games_per_bucket=100, acpl_bucket_size=20):
-    """Main analysis function."""
+def main(min_games_per_bucket=100, acpl_bucket_size=20, 
+         generate_time_control_graphs=True, generate_rating_bucket_graphs=True, 
+         generate_combined_graphs=True):
+    """Main analysis function.
+    
+    Args:
+        min_games_per_bucket: Minimum games required per bucket
+        acpl_bucket_size: Size of ACPL difference buckets
+        generate_time_control_graphs: Whether to generate per-time-control graphs (Bullet, Blitz, etc.)
+        generate_rating_bucket_graphs: Whether to generate per-rating-bucket graphs (comparing time controls)
+        generate_combined_graphs: Whether to generate combined graphs (all ratings, all time controls)
+    """
     print("Chess ACPL Difference vs Game Outcomes Analysis")
     print("="*80)
+    print(f"\nConfiguration:")
+    print(f"  - Generate time control graphs: {generate_time_control_graphs}")
+    print(f"  - Generate rating bucket graphs: {generate_rating_bucket_graphs}")
+    print(f"  - Generate combined graphs: {generate_combined_graphs}")
+    print()
     
     # Load and combine data
     df = load_and_combine_data()
@@ -587,49 +681,59 @@ def main(min_games_per_bucket=100, acpl_bucket_size=20):
     # Print summary statistics
     print_summary_statistics(game_df, results_df)
     
-    # Calculate outcome rates for specific time controls (0 increment only)
-    results_specific_tc = calculate_outcome_rates_by_specific_tc(game_df, min_games=1000)
+    # Calculate outcome rates for specific time controls (0 increment only) - only if needed
+    results_specific_tc = None
+    if generate_rating_bucket_graphs:
+        results_specific_tc = calculate_outcome_rates_by_specific_tc(game_df, min_games=1000)
     
     # Create visualizations
     print("\nCreating visualizations...")
     
     # === Part 1: Per-time-category graphs (existing functionality) ===
-    print("\n=== Generating graphs by time control category ===")
-    time_control_categories = ['Bullet', 'Blitz', 'Rapid', 'Classical']
-    
-    for tc_category in time_control_categories:
-        # Filter results for this time control category
-        tc_results = results_df[results_df['TimeControlCategory'] == tc_category].copy()
+    if generate_time_control_graphs:
+        print("\n=== Generating graphs by time control category ===")
+        time_control_categories = ['Bullet', 'Blitz', 'Rapid', 'Classical']
         
-        if len(tc_results) == 0:
-            print(f"  Skipping {tc_category} - no data")
-            continue
-        
-        print(f"\n  Processing {tc_category}...")
-        
-        # Get rating buckets for this time control
-        rating_buckets = sorted(tc_results['RatingBucket'].unique())
-        
-        if len(rating_buckets) == 0:
-            print(f"  Skipping {tc_category} - no rating buckets with sufficient data")
-            continue
-        
-        # 1. White win rate plot
-        fig1 = create_multi_rating_visualization(tc_results, rating_buckets, tc_category)
-        output_path1 = f"./media/acpl_outcome_winrate_{tc_category.lower()}.png"
-        fig1.savefig(output_path1, dpi=300, bbox_inches='tight')
-        print(f"    Saved: {output_path1}")
-        plt.close(fig1)
-        
-        # 2. Draw rate plot
-        fig2 = create_draw_rate_visualization(tc_results, rating_buckets, tc_category)
-        output_path2 = f"./media/acpl_outcome_drawrate_{tc_category.lower()}.png"
-        fig2.savefig(output_path2, dpi=300, bbox_inches='tight')
-        print(f"    Saved: {output_path2}")
-        plt.close(fig2)
+        for tc_category in time_control_categories:
+            # Filter results for this time control category
+            tc_results = results_df[results_df['TimeControlCategory'] == tc_category].copy()
+            
+            if len(tc_results) == 0:
+                print(f"  Skipping {tc_category} - no data")
+                continue
+            
+            print(f"\n  Processing {tc_category}...")
+            
+            # Get rating buckets for this time control
+            rating_buckets = sorted(tc_results['RatingBucket'].unique())
+            
+            if len(rating_buckets) == 0:
+                print(f"  Skipping {tc_category} - no rating buckets with sufficient data")
+                continue
+            
+            # 1. White win rate plot
+            fig1 = create_multi_rating_visualization(tc_results, rating_buckets, tc_category)
+            output_path1 = f"./media/acpl_outcome_winrate_{tc_category.lower()}.png"
+            fig1.savefig(output_path1, dpi=300, bbox_inches='tight')
+            print(f"    Saved: {output_path1}")
+            plt.close(fig1)
+            
+            # 2. Draw rate plot
+            fig2 = create_draw_rate_visualization(tc_results, rating_buckets, tc_category)
+            output_path2 = f"./media/acpl_outcome_drawrate_{tc_category.lower()}.png"
+            fig2.savefig(output_path2, dpi=300, bbox_inches='tight')
+            print(f"    Saved: {output_path2}")
+            plt.close(fig2)
+            
+            # 3. Draw odds plot (Black gets draw odds)
+            fig3 = create_draw_odds_visualization(tc_results, rating_buckets, tc_category)
+            output_path3 = f"./media/acpl_outcome_drawodds_{tc_category.lower()}.png"
+            fig3.savefig(output_path3, dpi=300, bbox_inches='tight')
+            print(f"    Saved: {output_path3}")
+            plt.close(fig3)
     
     # === Part 2: Per-rating-bucket graphs showing different time controls ===
-    if len(results_specific_tc) > 0:
+    if generate_rating_bucket_graphs and results_specific_tc is not None and len(results_specific_tc) > 0:
         print("\n=== Generating graphs by rating bucket (0 increment time controls) ===")
         
         # Get rating buckets that have data
@@ -664,58 +768,117 @@ def main(min_games_per_bucket=100, acpl_bucket_size=20):
                 plt.close(fig2)
     
     # === Part 3: Combined graph with all rating buckets (all time controls combined) ===
-    print("\n=== Generating combined graph (all rating buckets, all time controls) ===")
-    
-    # Use the original results_df which has all time controls
-    all_rating_buckets = sorted(results_df['RatingBucket'].unique())
-    
-    if len(all_rating_buckets) > 0:
-        # Aggregate across all time controls for each rating bucket
-        aggregated_results = []
+    if generate_combined_graphs:
+        print("\n=== Generating combined graph (all rating buckets, all time controls) ===")
         
-        for rating_bucket in all_rating_buckets:
-            for acpl_bucket in sorted(results_df['ACPL_Diff_Bucket'].unique()):
-                bucket_data = results_df[
-                    (results_df['RatingBucket'] == rating_bucket) & 
-                    (results_df['ACPL_Diff_Bucket'] == acpl_bucket)
-                ]
-                
-                if len(bucket_data) > 0:
-                    # Weighted average by number of games
-                    total_games = bucket_data['NumGames'].sum()
-                    white_win_rate = (bucket_data['WhiteWins'].sum() / total_games * 100) if total_games > 0 else 0
-                    draw_rate = (bucket_data['Draws'].sum() / total_games * 100) if total_games > 0 else 0
-                    
-                    aggregated_results.append({
-                        'RatingBucket': rating_bucket,
-                        'RatingBucketLabel': f"{int(rating_bucket)}-{int(rating_bucket)+199}",
-                        'ACPL_Diff_Bucket': acpl_bucket,
-                        'WhiteWinRate': white_win_rate,
-                        'DrawRate': draw_rate,
-                        'NumGames': total_games
-                    })
+        # Use the original results_df which has all time controls
+        all_rating_buckets = sorted(results_df['RatingBucket'].unique())
         
-        agg_results_df = pd.DataFrame(aggregated_results)
-        
-        if len(agg_results_df) > 0:
-            # White win rate plot
-            fig1 = create_multi_rating_visualization(agg_results_df, all_rating_buckets, "All Time Controls")
-            output_path1 = "./media/acpl_outcome_winrate_all_combined.png"
-            fig1.savefig(output_path1, dpi=300, bbox_inches='tight')
-            print(f"  Saved: {output_path1}")
-            plt.close(fig1)
+        if len(all_rating_buckets) > 0:
+            # Aggregate across all time controls for each rating bucket
+            aggregated_results = []
             
-            # Draw rate plot
-            fig2 = create_draw_rate_visualization(agg_results_df, all_rating_buckets, "All Time Controls")
-            output_path2 = "./media/acpl_outcome_drawrate_all_combined.png"
-            fig2.savefig(output_path2, dpi=300, bbox_inches='tight')
-            print(f"  Saved: {output_path2}")
-            plt.close(fig2)
+            for rating_bucket in all_rating_buckets:
+                for acpl_bucket in sorted(results_df['ACPL_Diff_Bucket'].unique()):
+                    bucket_data = results_df[
+                        (results_df['RatingBucket'] == rating_bucket) & 
+                        (results_df['ACPL_Diff_Bucket'] == acpl_bucket)
+                    ]
+                    
+                    if len(bucket_data) > 0:
+                        # Weighted average by number of games
+                        total_games = bucket_data['NumGames'].sum()
+                        white_wins = bucket_data['WhiteWins'].sum()
+                        black_wins = bucket_data['BlackWins'].sum()
+                        draws = bucket_data['Draws'].sum()
+                        
+                        white_win_rate = (white_wins / total_games * 100) if total_games > 0 else 0
+                        draw_rate = (draws / total_games * 100) if total_games > 0 else 0
+                        black_draw_odds_rate = ((black_wins + draws) / total_games * 100) if total_games > 0 else 0
+                        white_draw_odds_rate = (white_wins / total_games * 100) if total_games > 0 else 0  # Same as white_win_rate
+                        
+                        aggregated_results.append({
+                            'RatingBucket': rating_bucket,
+                            'RatingBucketLabel': f"{int(rating_bucket)}-{int(rating_bucket)+199}",
+                            'ACPL_Diff_Bucket': acpl_bucket,
+                            'WhiteWinRate': white_win_rate,
+                            'DrawRate': draw_rate,
+                            'BlackDrawOddsRate': black_draw_odds_rate,
+                            'WhiteDrawOddsRate': white_draw_odds_rate,
+                            'NumGames': total_games
+                        })
+            
+            agg_results_df = pd.DataFrame(aggregated_results)
+            
+            if len(agg_results_df) > 0:
+                # White win rate plot
+                fig1 = create_multi_rating_visualization(agg_results_df, all_rating_buckets, "All Time Controls")
+                output_path1 = "./media/acpl_outcome_winrate_all_combined.png"
+                fig1.savefig(output_path1, dpi=300, bbox_inches='tight')
+                print(f"  Saved: {output_path1}")
+                plt.close(fig1)
+                
+                # Draw rate plot
+                fig2 = create_draw_rate_visualization(agg_results_df, all_rating_buckets, "All Time Controls")
+                output_path2 = "./media/acpl_outcome_drawrate_all_combined.png"
+                fig2.savefig(output_path2, dpi=300, bbox_inches='tight')
+                print(f"  Saved: {output_path2}")
+                plt.close(fig2)
+                
+                # Draw odds plot (Black gets draw odds)
+                fig3 = create_draw_odds_visualization(agg_results_df, all_rating_buckets, "All Time Controls")
+                output_path3 = "./media/acpl_outcome_drawodds_all_combined.png"
+                fig3.savefig(output_path3, dpi=300, bbox_inches='tight')
+                print(f"  Saved: {output_path3}")
+                plt.close(fig3)
     
     print("\nAnalysis complete!")
     
     return game_df, results_df
 
 if __name__ == "__main__":
-    game_data, results = main()
+    parser = argparse.ArgumentParser(
+        description='Analyze chess game outcomes based on ACPL differences',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+
+        """
+    )
+    
+    parser.add_argument('--no-time-controls', action='store_true',
+                       help='Skip generating per-time-control graphs (Bullet, Blitz, etc.)')
+    parser.add_argument('--no-rating-buckets', action='store_true',
+                       help='Skip generating per-rating-bucket graphs (comparing time controls)')
+    parser.add_argument('--no-combined', action='store_true',
+                       help='Skip generating combined graphs (all ratings, all time controls)')
+    
+    # Convenience flags
+    parser.add_argument('--combined-only', action='store_true',
+                       help='Generate only combined graphs (shortcut for --no-time-controls --no-rating-buckets)')
+    parser.add_argument('--time-controls-only', action='store_true',
+                       help='Generate only time control graphs (shortcut for --no-rating-buckets --no-combined)')
+    
+    args = parser.parse_args()
+    
+    # Handle convenience flags
+    if args.combined_only:
+        args.no_time_controls = True
+        args.no_rating_buckets = True
+        args.no_combined = False
+    
+    if args.time_controls_only:
+        args.no_time_controls = False
+        args.no_rating_buckets = True
+        args.no_combined = True
+    
+    # Determine which graphs to generate
+    generate_tc = not args.no_time_controls
+    generate_rb = not args.no_rating_buckets
+    generate_combined = not args.no_combined
+    
+    game_data, results = main(
+        generate_time_control_graphs=generate_tc,
+        generate_rating_bucket_graphs=generate_rb,
+        generate_combined_graphs=generate_combined
+    )
 
